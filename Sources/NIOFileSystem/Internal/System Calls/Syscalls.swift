@@ -12,7 +12,7 @@
 //
 //===----------------------------------------------------------------------===//
 
-#if os(macOS) || os(iOS) || os(tvOS) || os(watchOS) || os(Linux) || os(Android)
+#if os(macOS) || os(iOS) || os(tvOS) || os(watchOS) || os(Android)
 import SystemPackage
 
 #if canImport(Darwin)
