@@ -20,7 +20,7 @@ import Dispatch
 
 #if canImport(WASILibc)
 import WASILibc
-import CNIOWASI
+// import CNIOWASI
 #endif
 
 #if os(Linux)

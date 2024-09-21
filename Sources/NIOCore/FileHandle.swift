@@ -23,7 +23,7 @@ import Musl
 import Android
 #elseif canImport(WASILibc)
 import WASILibc
-import CNIOWASI
+// import CNIOWASI
 #else
 #error("The File Handle module was unable to identify your C library.")
 #endif
