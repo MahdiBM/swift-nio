@@ -86,6 +86,7 @@ let package = Package(
                 "CNIODarwin",
                 "CNIOLinux",
                 "CNIOWindows",
+                "CNIOWASI",
                 "_NIODataStructures",
                 swiftCollections,
                 swiftAtomics,
@@ -172,6 +173,10 @@ let package = Package(
         ),
         .target(
             name: "CNIOWindows",
+            dependencies: []
+        ),
+        .target(
+            name: "CNIOWASI",
             dependencies: []
         ),
         .target(
