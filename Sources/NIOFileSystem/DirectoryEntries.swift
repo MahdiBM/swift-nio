@@ -13,8 +13,11 @@
 //===----------------------------------------------------------------------===//
 
 #if os(macOS) || os(iOS) || os(tvOS) || os(watchOS) || os(Linux) || os(Android)
+#if canImport(Darwin)
 import CNIODarwin
+#elseif canImport(Glibc)
 import CNIOLinux
+#endif
 import NIOConcurrencyHelpers
 import NIOPosix
 @preconcurrency import SystemPackage
