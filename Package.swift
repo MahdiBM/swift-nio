@@ -83,6 +83,9 @@ let package = Package(
             dependencies: [
                 "NIOConcurrencyHelpers",
                 "_NIOBase64",
+                "CNIODarwin",
+                "CNIOLinux",
+                "CNIOWindows",
                 "_NIODataStructures",
                 swiftCollections,
                 swiftAtomics,
@@ -109,6 +112,9 @@ let package = Package(
         .target(
             name: "NIOPosix",
             dependencies: [
+                "CNIOLinux",
+                "CNIODarwin",
+                "CNIOWindows",
                 "NIOConcurrencyHelpers",
                 "NIOCore",
                 "_NIODataStructures",
@@ -148,6 +154,24 @@ let package = Package(
         ),
         .target(
             name: "CNIOSHA1",
+            dependencies: []
+        ),
+        .target(
+            name: "CNIOLinux",
+            dependencies: [],
+            cSettings: [
+                .define("_GNU_SOURCE")
+            ]
+        ),
+        .target(
+            name: "CNIODarwin",
+            dependencies: [],
+            cSettings: [
+                .define("__APPLE_USE_RFC_3542")
+            ]
+        ),
+        .target(
+            name: "CNIOWindows",
             dependencies: []
         ),
         .target(
