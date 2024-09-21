@@ -12,22 +12,11 @@
 //
 //===----------------------------------------------------------------------===//
 
-#if os(macOS) || os(iOS) || os(tvOS) || os(watchOS) || os(Android)
+#if os(macOS) || os(iOS) || os(tvOS) || os(watchOS) || os(Linux) || os(Android)
 import SystemPackage
 
-#if canImport(Darwin)
-import Darwin
-import CNIODarwin
-#elseif canImport(Glibc)
 import Glibc
 import CNIOLinux
-#elseif canImport(Musl)
-import Musl
-import CNIOLinux
-#elseif canImport(Android)
-import Android
-import CNIOLinux
-#endif
 
 // MARK: - system
 
