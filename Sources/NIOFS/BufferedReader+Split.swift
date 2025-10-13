@@ -14,6 +14,8 @@
 
 import NIOCore
 
+// MARK: - SplitSequence
+
 @available(macOS 10.15, iOS 13.0, watchOS 6.0, tvOS 13.0, *)
 extension BufferedReader {
     /// Returns the longest possible subsequences of the sequence, in order, that
@@ -148,3 +150,110 @@ extension BufferedReader.SplitSequence: Sendable where BufferedReader: Sendable 
 
 @available(macOS 10.15, iOS 13.0, watchOS 6.0, tvOS 13.0, *)
 extension BufferedReader.SplitSequence.AsyncIterator: Sendable where BufferedReader: Sendable {}
+
+// MARK: - SplitLinesSequence
+
+@available(macOS 10.15, iOS 13.0, watchOS 6.0, tvOS 13.0, *)
+extension BufferedReader {
+    /// Returns each line in the file as a ``ByteBuffer``.
+    /// Splits the file by CR, LF, or CR+LF.
+    ///
+    /// Usage example:
+    /// ```swift
+    /// let myBufferedReader: BufferedReader = ...
+    /// for try await buffer in myBufferedReader.splitLines() {
+    ///     print("Split by new lines!\n", buffer.hexDump(format: .detailed))
+    /// }
+    /// ```
+    ///
+    /// - Parameters:
+    ///   - omittingEmptySubsequences: If `false`, an empty subsequence is
+    ///     returned in the result for each consecutive pair of `separator`
+    ///     elements in the sequence and for each instance of `separator` at the
+    ///     start or end of the sequence. If `true`, only nonempty subsequences
+    ///     are returned. The default value is `true`.
+    /// - Returns: An ``AsyncSequence`` of ``ByteBuffer``s, split from the ``BufferedReader``'s file.
+    ///
+    /// - Complexity: O(*n*), where *n* is the length of the file.
+    @inlinable
+    public consuming func splitLines(omittingEmptySubsequences: Bool = true) -> SplitLinesSequence {
+        SplitLinesSequence(
+            reader: self,
+            omittingEmptySubsequences: omittingEmptySubsequences
+        )
+    }
+
+    /// An ``AsyncSequence`` of ``ByteBuffer`` lines, split from the ``BufferedReader``'s file.
+    /// Splits the file by CR, LF, or CR+LF.
+    ///
+    /// Use ``BufferedReader/splitLines(omittingEmptySubsequences:)`` to create an instance of this sequence.
+    public struct SplitLinesSequence {
+        var reader: BufferedReader<Handle>
+        var omittingEmptySubsequences: Bool
+
+        @usableFromInline
+        init(
+            reader: BufferedReader<Handle>,
+            omittingEmptySubsequences: Bool
+        ) {
+            self.reader = reader
+            self.omittingEmptySubsequences = omittingEmptySubsequences
+        }
+    }
+}
+
+@available(macOS 10.15, iOS 13.0, watchOS 6.0, tvOS 13.0, *)
+extension BufferedReader.SplitLinesSequence: AsyncSequence {
+    /// Returns an iterator over the elements of this sequence.
+    public func makeAsyncIterator() -> AsyncIterator {
+        AsyncIterator(base: self)
+    }
+
+    /// An iterator over the elements of this sequence.
+    public struct AsyncIterator: AsyncIteratorProtocol {
+        var base: BufferedReader<Handle>.SplitLinesSequence
+        var previousWasCR = false
+        var ended = false
+
+        /// Returns the next element in the sequence, or `nil` if the sequence has ended.
+        public mutating func next() async throws -> ByteBuffer? {
+            if self.ended { return nil }
+
+            let (buffer, eof) = try await self.base.reader.read(while: {
+                !($0 == UInt8(ascii: "\n") || $0 == UInt8(ascii: "\r"))
+            })
+            if eof {
+                self.ended = true
+            } else {
+                let splitByte = try await self.base.reader
+                    .read(.bytes(1))
+                    .peekInteger(as: UInt8.self)
+
+                /// See if we're dealing with a \r\n
+                if self.previousWasCR,
+                    buffer.readableBytes == 0,
+                    splitByte == UInt8(ascii: "\n")
+                {
+                    self.previousWasCR = false
+                    return try await self.next()
+                }
+
+                self.previousWasCR = splitByte == UInt8(ascii: "\r")
+            }
+
+            if self.base.omittingEmptySubsequences,
+                buffer.readableBytes == 0
+            {
+                return try await self.next()
+            }
+
+            return buffer
+        }
+    }
+}
+
+@available(macOS 10.15, iOS 13.0, watchOS 6.0, tvOS 13.0, *)
+extension BufferedReader.SplitLinesSequence: Sendable where BufferedReader: Sendable {}
+
+@available(macOS 10.15, iOS 13.0, watchOS 6.0, tvOS 13.0, *)
+extension BufferedReader.SplitLinesSequence.AsyncIterator: Sendable where BufferedReader: Sendable {}

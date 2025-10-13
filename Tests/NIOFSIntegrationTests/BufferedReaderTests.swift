@@ -329,4 +329,84 @@ final class BufferedReaderTests: XCTestCase {
             XCTAssertEqual(words, expected)
         }
     }
+
+    func testBufferedReaderSplitLinesOmittingEmptySubsequences() async throws {
+        let fs = FileSystem.shared
+        let path = try await fs.temporaryFilePath()
+
+        try await fs.withFileHandle(
+            forWritingAt: path,
+            options: .newFile(replaceExisting: false)
+        ) { handle in
+            let text =
+                "\nHere's\n\n\r\n\r\n\nto\r\nthe\n\rcrazy\nones,\r\n   the misfits, the rebels,  the ones who see things differently.\r\n"
+
+            var writer = handle.bufferedWriter()
+            try await writer.write(contentsOf: text.utf8)
+            try await writer.flush()
+        }
+
+        try await fs.withFileHandle(forReadingAt: path) { file in
+            let reader = file.bufferedReader()
+            var lines = [String]()
+
+            for try await var characters in reader.splitLines(omittingEmptySubsequences: true) {
+                lines.append(characters.readString(length: characters.readableBytes)!)
+            }
+
+            let expected: [String] = [
+                "Here\'s",
+                "to",
+                "the",
+                "crazy",
+                "ones,",
+                "   the misfits, the rebels,  the ones who see things differently.",
+            ]
+
+            XCTAssertEqual(lines, expected)
+        }
+    }
+
+    func testBufferedReaderSplitLinesNotOmittingEmptySubsequences() async throws {
+        let fs = FileSystem.shared
+        let path = try await fs.temporaryFilePath()
+
+        try await fs.withFileHandle(
+            forWritingAt: path,
+            options: .newFile(replaceExisting: false)
+        ) { handle in
+            let text = "\nHere's\n\n\r\n\r\n\nto\r\nthe\n\rcrazy\nones,\r\n   the misfits, the rebels,  the ones who see things differently.\r\n"
+
+            var writer = handle.bufferedWriter()
+            try await writer.write(contentsOf: text.utf8)
+            try await writer.flush()
+        }
+
+        try await fs.withFileHandle(forReadingAt: path) { file in
+            let reader = file.bufferedReader()
+            var lines = [String]()
+
+            for try await var characters in reader.splitLines(omittingEmptySubsequences: false) {
+                lines.append(characters.readString(length: characters.readableBytes)!)
+            }
+
+            let expected: [String] = [
+                "",
+                "Here\'s",
+                "",
+                "",
+                "",
+                "",
+                "to",
+                "the",
+                "",
+                "crazy",
+                "ones,",
+                "   the misfits, the rebels,  the ones who see things differently.",
+                ""
+            ]
+
+            XCTAssertEqual(lines, expected)
+        }
+    }
 }
