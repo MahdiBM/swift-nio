@@ -125,6 +125,54 @@ extension AsyncSequence where Element == ByteBuffer {
             whereSeparator: { $0 == separator }
         )
     }
+
+    /// Returns the longest possible subsequences of the sequence, in order,
+    /// that are separated by a line break.
+    ///
+    /// The following Characters are considered line breaks, similar to
+    /// standard library's `String.split(whereSeparator: \.isNewline)`:
+    /// - "\n" (U+000A): LINE FEED (LF)
+    /// - U+000B: LINE TABULATION (VT)
+    /// - U+000C: FORM FEED (FF)
+    /// - "\r" (U+000D): CARRIAGE RETURN (CR)
+    /// - "\r\n" (U+000D U+000A): CR-LF
+    ///
+    /// The following Characters are NOT considered line breaks, unlike in
+    /// standard library's `String.split(whereSeparator: \.isNewline)`:
+    /// - U+0085: NEXT LINE (NEL)
+    /// - U+2028: LINE SEPARATOR
+    /// - U+2029: PARAGRAPH SEPARATOR
+    ///
+    /// This is because these characters would require unicode and data-encoding awareness, which
+    /// are outside swift-nio's scope.
+    ///
+    /// Usage:
+    /// ```swift
+    /// let baseSequence = MyAsyncSequence<ByteBuffer>(...)
+    /// let splitLinesSequence = baseSequence.splitLines()
+    ///
+    /// for try await buffer in splitLinesSequence {
+    ///     print("Split by line breaks!\n", buffer.hexDump(format: .detailed))
+    /// }
+    /// ```
+    ///
+    /// - Parameters:
+    ///   - omittingEmptySubsequences: If `false`, an empty subsequence is
+    ///     returned in the result for each consecutive line break in the sequence.
+    ///     If `true`, only nonempty subsequences are returned. The default value is `true`.
+    /// - Returns: An `AsyncSequence` of ``ByteBuffer``s, split from the this async sequence's bytes.
+    ///
+    /// - Complexity: O(*n*), where *n* is the length of the file.
+    @inlinable
+    public func splitLines(
+        omittingEmptySubsequences: Bool = true,
+        maximumBufferSize: Int? = nil
+    ) -> NIODecodedAsyncSequence<Self, NIOSplitLinesMessageDecoder> {
+        self.decode(
+            using: NIOSplitLinesMessageDecoder(omittingEmptySubsequences: omittingEmptySubsequences),
+            maximumBufferSize: maximumBufferSize
+        )
+    }
 }
 
 // MARK: - NIODecodedAsyncSequence
@@ -312,6 +360,16 @@ extension NIODecodedAsyncSequence.AsyncIterator: Sendable {}
 /// Use `AsyncSequence/split(omittingEmptySubsequences:maximumBufferSize:whereSeparator:)`
 /// or `AsyncSequence/split(separator:omittingEmptySubsequences:maximumBufferSize:)` to create a
 /// `NIODecodedAsyncSequence` that uses this decoder.
+///
+/// Usage:
+/// ```swift
+/// let baseSequence = MyAsyncSequence<ByteBuffer>(...)
+/// let splitSequence = baseSequence.split(separator: UInt8(ascii: " "))
+///
+/// for try await buffer in splitSequence {
+///     print("Split by separator!\n", buffer.hexDump(format: .detailed))
+/// }
+/// ```
 public struct NIOSplitMessageDecoder: NIOSingleStepByteToMessageDecoder {
     public typealias InboundOut = ByteBuffer
 
@@ -324,7 +382,7 @@ public struct NIOSplitMessageDecoder: NIOSingleStepByteToMessageDecoder {
 
     @inlinable
     init(
-        omittingEmptySubsequences: Bool = false,
+        omittingEmptySubsequences: Bool,
         whereSeparator isSeparator: @escaping (UInt8) -> Bool
     ) {
         self.omittingEmptySubsequences = omittingEmptySubsequences
@@ -334,7 +392,10 @@ public struct NIOSplitMessageDecoder: NIOSingleStepByteToMessageDecoder {
 
     /// Decode the next message from the given buffer.
     @inlinable
-    mutating func decode(buffer: inout ByteBuffer, hasReceivedLastChunk: Bool) throws -> InboundOut? {
+    mutating func decode(
+        buffer: inout ByteBuffer,
+        hasReceivedLastChunk: Bool
+    ) throws -> (buffer: InboundOut, separator: UInt8?)? {
         if self.ended { return nil }
 
         while true {
@@ -353,22 +414,28 @@ public struct NIOSplitMessageDecoder: NIOSingleStepByteToMessageDecoder {
                 }
 
                 // Just send the whole buffer if we're at the last chunk but we can find no separators
-                return buffer.readSlice(length: buffer.readableBytes)
+                // Safe to force unwrap. `buffer.readableBytes` is `0` in the worst case.
+                let slice = buffer.readSlice(length: buffer.readableBytes)!
+
+                return (slice, nil)
             }
 
             // Safe to force unwrap. We just found a separator somewhere in the buffer.
             let slice = buffer.readSlice(length: separatorIndex - buffer.readerIndex)!
 
-            // Mark the separator itself as read
-            buffer._moveReaderIndex(forwardBy: 1)
-
             if self.omittingEmptySubsequences,
                 slice.readableBytes == 0
             {
+                // Mark the separator itself as read
+                buffer._moveReaderIndex(forwardBy: 1)
                 continue
             }
 
-            return slice
+            // Read the separator itself
+            // Safe to force unwrap. We just found a separator somewhere in the buffer.
+            let separator = buffer.readInteger(as: UInt8.self)!
+
+            return (slice, separator)
         }
     }
 
@@ -376,10 +443,129 @@ public struct NIOSplitMessageDecoder: NIOSingleStepByteToMessageDecoder {
     /// To be used when we're still receiving data.
     @inlinable
     public mutating func decode(buffer: inout ByteBuffer) throws -> InboundOut? {
-        try self.decode(buffer: &buffer, hasReceivedLastChunk: false)
+        try self.decode(buffer: &buffer, hasReceivedLastChunk: false)?.buffer
     }
 
     /// Decode the next message separated by the provided separator.
+    /// To be used when the last chunk of data has been received.
+    @inlinable
+    public mutating func decodeLast(buffer: inout ByteBuffer, seenEOF: Bool) throws -> InboundOut? {
+        try self.decode(buffer: &buffer, hasReceivedLastChunk: true)?.buffer
+    }
+}
+
+@available(*, unavailable)
+extension NIOSplitMessageDecoder: Sendable {}
+
+// MARK: - NIOSplitLinesMessageDecoder
+
+/// A decoder which splits the data into subsequences that are separated by a line break.
+///
+/// Use `AsyncSequence/splitLines(omittingEmptySubsequences:maximumBufferSize:)` to create a
+/// `NIODecodedAsyncSequence` that uses this decoder.
+///
+/// The following Characters are considered line breaks, similar to
+/// standard library's `String.split(whereSeparator: \.isNewline)`:
+/// - "\n" (U+000A): LINE FEED (LF)
+/// - U+000B: LINE TABULATION (VT)
+/// - U+000C: FORM FEED (FF)
+/// - "\r" (U+000D): CARRIAGE RETURN (CR)
+/// - "\r\n" (U+000D U+000A): CR-LF
+///
+/// The following Characters are NOT considered line breaks, unlike in
+/// standard library's `String.split(whereSeparator: \.isNewline)`:
+/// - U+0085: NEXT LINE (NEL)
+/// - U+2028: LINE SEPARATOR
+/// - U+2029: PARAGRAPH SEPARATOR
+///
+/// This is because these characters would require unicode and data-encoding awareness, which
+/// are outside swift-nio's scope.
+///
+/// Usage:
+/// ```swift
+/// let baseSequence = MyAsyncSequence<ByteBuffer>(...)
+/// let splitLinesSequence = baseSequence.splitLines()
+///
+/// for try await buffer in splitLinesSequence {
+///     print("Split by line breaks!\n", buffer.hexDump(format: .detailed))
+/// }
+/// ```
+public struct NIOSplitLinesMessageDecoder: NIOSingleStepByteToMessageDecoder {
+    public typealias InboundOut = ByteBuffer
+
+    @usableFromInline
+    var splitDecoder: NIOSplitMessageDecoder
+    @usableFromInline
+    var previousSeparatorWasCR: Bool
+
+    @inlinable
+    init(omittingEmptySubsequences: Bool) {
+        self.splitDecoder = NIOSplitMessageDecoder(
+            omittingEmptySubsequences: omittingEmptySubsequences,
+            whereSeparator: Self.isLineBreak
+        )
+        self.previousSeparatorWasCR = false
+    }
+
+    /// - "\n" (U+000A): LINE FEED (LF)
+    /// - U+000B: LINE TABULATION (VT)
+    /// - U+000C: FORM FEED (FF)
+    /// - "\r" (U+000D): CARRIAGE RETURN (CR)
+    /// - "\r\n" (U+000D U+000A): CR-LF
+    ///
+    /// "\r\n" is manually accounted for during the decoding.
+    @inlinable
+    static func isLineBreak(_ byte: UInt8) -> Bool {
+        // First check <= \r. Most bytes won't pass this check, so we can return earlier than if we checked >= \n first.
+        byte <= UInt8(ascii: "\r") && byte >= UInt8(ascii: "\n")
+    }
+
+    /// Decode the next message from the given buffer.
+    @inlinable
+    mutating func decode(buffer: inout ByteBuffer, hasReceivedLastChunk: Bool) throws -> InboundOut? {
+        while true {
+            guard
+                let (slice, separator) = try self.splitDecoder.decode(
+                    buffer: &buffer,
+                    hasReceivedLastChunk: hasReceivedLastChunk
+                )
+            else {
+                return nil
+            }
+
+            // If we are getting rid of empty subsequences then it doesn't matter if we detect
+            // \r\n as CR+LF, or as a CR + a LF. The backing decoder gets rid of the empty subsequence
+            // anyway. Therefore, we can return early right here and skip the rest of the logic.
+            if self.splitDecoder.omittingEmptySubsequences {
+                return slice
+            }
+
+            // "\r\n" is 2 bytes long, so we need to manually account for it.
+            switch separator {
+            case UInt8(ascii: "\n") where slice.readableBytes == 0:
+                let isCRLF = self.previousSeparatorWasCR
+                self.previousSeparatorWasCR = false
+                if isCRLF {
+                    continue
+                }
+            case UInt8(ascii: "\r"):
+                self.previousSeparatorWasCR = true
+            default:
+                self.previousSeparatorWasCR = false
+            }
+
+            return slice
+        }
+    }
+
+    /// Decode the next message separated by one of the ASCII line breaks.
+    /// To be used when we're still receiving data.
+    @inlinable
+    public mutating func decode(buffer: inout ByteBuffer) throws -> InboundOut? {
+        try self.decode(buffer: &buffer, hasReceivedLastChunk: false)
+    }
+
+    /// Decode the next message separated by one of the ASCII line breaks.
     /// To be used when the last chunk of data has been received.
     @inlinable
     public mutating func decodeLast(buffer: inout ByteBuffer, seenEOF: Bool) throws -> InboundOut? {
@@ -388,4 +574,4 @@ public struct NIOSplitMessageDecoder: NIOSingleStepByteToMessageDecoder {
 }
 
 @available(*, unavailable)
-extension NIOSplitMessageDecoder: Sendable {}
+extension NIOSplitLinesMessageDecoder: Sendable {}
